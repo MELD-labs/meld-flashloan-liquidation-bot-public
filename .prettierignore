@@ -1,0 +1,14 @@
+# Ignore artifacts:
+build
+coverage
+artifacts
+cache
+typechain-types
+node_modules
+
+# Specific files
+.solcover.js
+coverage.json
+
+# Ignore all HTML files:
+*.html
