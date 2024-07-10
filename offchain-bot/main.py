@@ -10,7 +10,7 @@ from web3.middleware import geth_poa_middleware
 BASEDIR = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(BASEDIR, '../.env'))
 
-ABI_FOLDER_PATH = "./abis"
+ABI_FOLDER_PATH = "./artifacts/contracts"
 RPC = os.getenv('BOT_RPC')
 ADDRESS_PROVIDER_CONTRACT_ADDRESS = os.getenv(
     'BOT_ADDRESS_PROVIDER_CONTRACT_ADDRESS')
@@ -20,25 +20,33 @@ LIQUIDATOR_WALLET_PRIVATE_KEY = os.getenv('BOT_OPERATING_WALLET_PRIVATE_KEY')
 
 API_URL = os.getenv('BOT_API_URL')
 
-f = open(f'{ABI_FOLDER_PATH}/addressProviderABI.json')
-addressProviderABI = json.load(f)
-f.close()
 
-f = open(f'{ABI_FOLDER_PATH}/lendingPoolABI.json')
-lendingPoolABI = json.load(f)
-f.close()
+def getAbi(abiSubPath):
+    try:
+        with (open(f'{ABI_FOLDER_PATH}/{abiSubPath}')) as f:
+            artifact = json.load(f)
+        return artifact["abi"]
+    except Exception as e:
+        print(f"Error loading ABI: {e}")
 
-f = open(f'{ABI_FOLDER_PATH}/dataProviderABI.json')
-dataProviderABI = json.load(f)
-f.close()
+        print("\nHave you compiled the contracts? \nRun `yarn compile`")
+        sys.exit()
 
-f = open(f'{ABI_FOLDER_PATH}/genericABI.json')
-genericABI = json.load(f)
-f.close()
 
-f = open(f'{ABI_FOLDER_PATH}/liquidateLoanABI.json')
-liquidateLoanABI = json.load(f)
-f.close()
+addressProviderABI = getAbi(
+    "interfaces/IAddressesProvider.sol/IAddressesProvider.json")
+
+lendingPoolABI = getAbi(
+    "interfaces/ILendingPool.sol/ILendingPool.json")
+
+dataProviderABI = getAbi(
+    "interfaces/IMeldProtocolDataProvider.sol/IMeldProtocolDataProvider.json")
+
+ierc20ABI = getAbi(
+    "interfaces/IERC20.sol/IERC20.json")
+
+liquidateLoanABI = getAbi("LiquidateLoan.sol/LiquidateLoan.json")
+
 
 w3 = Web3(Web3.HTTPProvider(RPC))
 w3.middleware_onion.inject(geth_poa_middleware, layer=0)
@@ -305,13 +313,13 @@ def trigger_logic():
                         "Scaled Debt is more than collateral. We can only liquidate the USD-equivalent of the collateral in debt tokens")
 
                     dDecimals = w3.eth.contract(address=Web3.to_checksum_address(
-                        debtAddress), abi=genericABI).functions.decimals().call()
+                        debtAddress), abi=ierc20ABI).functions.decimals().call()
                     oneDebtInUSD = float(b.variableRate.fiatAmount) / float(
                         int(b.variableRate.totalBorrowedAmount) / pow(10, dDecimals))
                     print(f"One debt token in USD: {oneDebtInUSD}")
 
                     cDecimals = w3.eth.contract(address=Web3.to_checksum_address(
-                        collateralAddress), abi=genericABI).functions.decimals().call()
+                        collateralAddress), abi=ierc20ABI).functions.decimals().call()
                     oneCollateralInUSD = float(
                         c.fiatAmount) / float(int(c.totalSuppliedAmount) / pow(10, cDecimals))
                     print(f"One collateral token in USD: {oneCollateralInUSD}")
