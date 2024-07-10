@@ -2,9 +2,17 @@ import { ethers } from "hardhat";
 import { env } from "process";
 
 async function main() {
-  const protocolAddressProvider = env.PROTOCOL_ADDRESS_PROVIDER;
-  const uniswapV2Router = env.UNI_V2_ROUTER_ADDRESS;
+  const protocolAddressProvider = env.PROTOCOL_ADDRESS_PROVIDER || "";
+  const uniswapV2Router = env.UNI_V2_ROUTER_ADDRESS || "";
   const deployer = (await ethers.getSigners())[0];
+
+  if (!protocolAddressProvider) {
+    throw new Error("Protocol address provider is not provided");
+  }
+
+  if (!uniswapV2Router) {
+    throw new Error("Uniswap V2 router address is not provided");
+  }
 
   console.log(
     `Deploying liquidation bot with the account: ${deployer.address}`
