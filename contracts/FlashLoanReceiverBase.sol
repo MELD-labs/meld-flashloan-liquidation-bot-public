@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {
     IFlashLoanReceiver,
     IAddressesProvider,
     ILendingPool
-} from "./interfaces/IFlashLoanReceiver.sol";
+} from "../interfaces/IFlashLoanReceiver.sol";
+
+import {Errors} from "../libraries/helpers/Errors.sol";
 
 /**
  * @title FlashLoanReceiverBase contract
@@ -16,7 +17,6 @@ import {
  */
 abstract contract FlashLoanReceiverBase is IFlashLoanReceiver {
     using SafeERC20 for IERC20;
-    using SafeMath for uint256;
 
     IAddressesProvider public immutable override ADDRESSES_PROVIDER; // solhint-disable-line immutable-vars-naming
     ILendingPool public immutable override LENDING_POOL; // solhint-disable-line immutable-vars-naming
@@ -26,7 +26,9 @@ abstract contract FlashLoanReceiverBase is IFlashLoanReceiver {
      * @param _addressesProvider The protocol address provider
      */
     constructor(IAddressesProvider _addressesProvider) {
+        require(address(_addressesProvider) != address(0), Errors.INVALID_ADDRESS);
         ADDRESSES_PROVIDER = _addressesProvider;
         LENDING_POOL = ILendingPool(_addressesProvider.getLendingPool());
+        require(address(LENDING_POOL) != address(0), Errors.INVALID_ADDRESS);
     }
 }
