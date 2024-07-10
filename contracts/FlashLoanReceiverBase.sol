@@ -6,9 +6,9 @@ import {
     IFlashLoanReceiver,
     IAddressesProvider,
     ILendingPool
-} from "../interfaces/IFlashLoanReceiver.sol";
+} from "./interfaces/IFlashLoanReceiver.sol";
 
-import {Errors} from "../libraries/helpers/Errors.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 /**
  * @title FlashLoanReceiverBase contract

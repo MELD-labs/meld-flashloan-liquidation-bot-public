@@ -106,8 +106,6 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         address _userToLiquidate,
         address[] memory _swapPath
     ) public {
-        address receiverAddress = address(this);
-
         // the asset to be flashed is the asset to be liquidated
         address[] memory assets = new address[](1);
         assets[0] = _assetToLiquidate;
@@ -120,7 +118,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         bytes memory params = abi.encode(_collateralAsset, _userToLiquidate, _swapPath);
 
         // Execute the flashloan. The flow will continue in the executeOperation function.
-        ILendingPool(lendingPoolAddr).flashLoan(receiverAddress, assets, amounts, params);
+        ILendingPool(lendingPoolAddr).flashLoan(assets, amounts, params);
     }
 
     /**

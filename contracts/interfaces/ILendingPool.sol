@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {DataTypes} from "../libraries/types/DataTypes.sol";
+import {DataTypes} from "./DataTypes.sol";
 
 /**
  * @title ILendingPool interface
