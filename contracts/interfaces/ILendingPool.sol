@@ -186,13 +186,12 @@ interface ILendingPool {
 
     /**
      * @notice Allows Smart Contracts to access the liquidity of the pool within one transaction, as long as the amount taken plus a fee is returned
-     * @param _receiverAddress The address of the contract receiving the funds. The receiver should implement the IFlashLoanReceiver interface.
+     * @dev The caller of the function will be the receiver of the funds
      * @param _assets the addresses of the assets being flash-borrowed
      * @param _amounts the amounts amounts being flash-borrowed
      * @param _params Variadic packed params to pass to the receiver as extra information
      */
     function flashLoan(
-        address _receiverAddress,
         address[] calldata _assets,
         uint256[] calldata _amounts,
         bytes calldata _params
@@ -317,7 +316,7 @@ interface ILendingPool {
 
     /**
      * @notice Sets the address of the MeldBankerNFT, obtaining the address from the AddressesProvider
-     * @dev Only callable by the pool admin
+     * @dev Can be called by anyone, automatically takes the new address from the addresses provider
      */
     function setMeldBankerNFT() external;
 
