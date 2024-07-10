@@ -4,7 +4,7 @@ This repo contains the contracts and offchain systems needed to run a liquidatio
 
 The contracts are written in Solidity, and the bot in Python.
 
-To configure the bot, create a `.env` file following the example of `.env.example` filling the details for configuration.
+To configure the bot, create a `.env` file following the example of `.sample.env` filling the details for configuration.
 
 The bot and contracts are provided as refference, but we encourage you to extend them and ensure they work following your desired flows. Do not trust the contracts and scripts in this repo blidly, DYOR.
 
@@ -30,9 +30,15 @@ yarn hardhat verify --network <network> <contract address> <constructor argument
 
 ## Offchain bot
 
-The bot is written in Python in the folder `./offchain-bot ` with all the dependencies.
+The bot is written in Python in the folder `./offchain-bot ` .
 
-To execute, ensure you have all the dependencies installed and run
+To execute, ensure you have all the dependencies installed and then compile the contracts to get the ABIs:
+
+```
+yarn compile
+```
+
+Then you can run the bot with the command:
 
 ```
 python offchain-bot/main.py
