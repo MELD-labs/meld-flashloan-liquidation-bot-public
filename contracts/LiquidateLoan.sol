@@ -29,6 +29,26 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     // Will receive the benefits from liquidations
     address public treasury;
 
+    /**
+     * @notice  Event emitted when a flash loan liquidation is executed
+     * @param   collateralAddress  Address of the collateral token
+     * @param   debtAddress  Address of the debt token
+     * @param   flashLoanAmount  Amount of the flash loan
+     * @param   flashLoanPremium  Premium of the flash loan
+     * @param   actualDebtCovered  Amount of the debt covered
+     * @param   actualCollateralLiquidated  Amount of the collateral liquidated
+     * @param   debtAssetProfit  Profit from the liquidation
+     */
+    event FlashLoanLiquidation(
+        address indexed collateralAddress,
+        address indexed debtAddress,
+        uint256 flashLoanAmount,
+        uint256 flashLoanPremium,
+        uint256 actualDebtCovered,
+        uint256 actualCollateralLiquidated,
+        uint256 debtAssetProfit
+    );
+
     constructor(
         address _protocolAddressProvider,
         address _uniswapV2Router,
@@ -145,13 +165,9 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
 
         IERC20(asset).approve(address(lendingPoolAddr), amount);
 
-        ILendingPool(lendingPoolAddr).liquidationCall(
-            collateral,
-            asset,
-            userToLiquidate,
-            amount,
-            false
-        );
+        (uint256 actualDebtCovered, uint256 actualCollateralLiquidated) = ILendingPool(
+            lendingPoolAddr
+        ).liquidationCall(collateral, asset, userToLiquidate, amount, false);
 
         //swap collateral from liquidate back to asset from flashloan to pay it off
         uint256 currentBalance = IERC20(collateral).balanceOf(address(this));
@@ -168,6 +184,16 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
 
         // Approve the LendingPool contract allowance to *pull* the owed amount
         IERC20(asset).approve(lendingPoolAddr, amount + premium);
+
+        emit FlashLoanLiquidation(
+            collateral,
+            asset,
+            amount,
+            premium,
+            actualDebtCovered,
+            actualCollateralLiquidated,
+            profit
+        );
 
         return true;
     }
