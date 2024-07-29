@@ -5,14 +5,13 @@ import {FlashLoanReceiverBase} from "./FlashLoanReceiverBase.sol";
 import {IAddressesProvider} from "./interfaces/IAddressesProvider.sol";
 import {ILendingPool} from "./interfaces/ILendingPool.sol";
 import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
-
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title LiquidateLoan
- * @author Pepe Blasco
+ * @author Pepe Blasco & MELD team
  * @notice A contract that liquidates unhealthy loans leveraging flashloans and swaps the collateral back to the borrowed asset in a uniV2 protocol
  */
 contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
@@ -22,7 +21,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     IAddressesProvider public provider;
     IUniswapV2Router02 public uniswapV2Router;
 
-    uint256 public myMinBenefit;
+    uint256 public myMinBenefit; // In basis points (105_00 = 5% benefit)
 
     address public lendingPoolAddr;
 
@@ -33,6 +32,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
      * @notice  Event emitted when a flash loan liquidation is executed
      * @param   collateralAddress  Address of the collateral token
      * @param   debtAddress  Address of the debt token
+     * @param   liquidatedUser  Address of the user that has been liquidated
      * @param   flashLoanAmount  Amount of the flash loan
      * @param   flashLoanPremium  Premium of the flash loan
      * @param   actualDebtCovered  Amount of the debt covered
@@ -42,6 +42,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     event FlashLoanLiquidation(
         address indexed collateralAddress,
         address indexed debtAddress,
+        address indexed liquidatedUser,
         uint256 flashLoanAmount,
         uint256 flashLoanPremium,
         uint256 actualDebtCovered,
@@ -49,6 +50,12 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         uint256 debtAssetProfit
     );
 
+    /**
+     * @notice  Constructor for the LiquidateLoan contract
+     * @param   _protocolAddressProvider  Address of the protocol address provider
+     * @param   _uniswapV2Router  Address of the UniswapV2Router02
+     * @param   _defaultAdmin  Address of the default admin
+     */
     constructor(
         address _protocolAddressProvider,
         address _uniswapV2Router,
@@ -83,9 +90,10 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
 
     /**
      * @notice  This function is used to set the minimum benefit that the liquidator will get from the liquidation
-     * @param   _myMinBenefit  Minimum benefit that the liquidator will get from the liquidation
+     * @param   _myMinBenefit  Minimum benefit that the liquidator will get from the liquidation in basis points (105_00 = 5% benefit)
      */
     function setMyMinBenefit(uint256 _myMinBenefit) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_myMinBenefit > 100_00, "Invalid min benefit");
         myMinBenefit = _myMinBenefit;
     }
 
@@ -113,7 +121,8 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     /**
      * @notice  This function is externally called to start the flash loan liquidation process
      * @dev     Anyone can call this function to liquidate a loan. Profit will be sent to the treasury
-     * @param   _assetToLiquidate  Token address of the asset that will be liquidated
+     * @dev     The flash loan is used to borrow the amount of the debt token to liquidate the position
+     * @param   _assetToLiquidate  Token address of the asset that will be liquidated (debt token)
      * @param   _flashLoanAmount  Flash loan amount (number of tokens) which is exactly the amount that will be liquidated
      * @param   _collateralAsset  Token address of the collateral. This is the token that will be received after liquidating loans
      * @param   _userToLiquidate  User Address of the loan that will be liquidated
@@ -144,52 +153,62 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     /**
      * @notice  Executes the operation on the flash loan. Automatically called by the L&B protocol after granting flash loan
      * @dev     Function name and params needs to comply with the protocol's standards. Do not change the interface
+     * @param   _assets  Array of addresses of the assets that are being flashed (should include only the debt token)
+     * @param   _amounts  Array of amounts of the assets that are being flashed (should include only the debt token flash loan amount)
+     * @param   _premiums  Array of premiums of the assets that are being flashed (should include only the debt token premium)
+     * @param   _params  Additional data that is passed to the executeOperation function (this includes the collateral, userToLiquidate and swapPath)
      */
     function executeOperation(
-        address[] calldata assets,
-        uint256[] calldata amounts,
-        uint256[] calldata premiums,
+        address[] calldata _assets,
+        uint256[] calldata _amounts,
+        uint256[] calldata _premiums,
         address,
-        bytes calldata params
+        bytes calldata _params
     ) external override returns (bool) {
         // This are the params we passed into the flashloan function
         (address collateral, address userToLiquidate, address[] memory swapPath) = abi.decode(
-            params,
+            _params,
             (address, address, address[])
         );
 
         // Approve tokens and liquidate unhealthy loan
-        address asset = assets[0];
-        uint256 amount = amounts[0];
-        uint256 premium = premiums[0];
+        address debtAsset = _assets[0];
+        uint256 flashLoanAmount = _amounts[0];
+        uint256 flashLoanPremium = _premiums[0];
 
-        IERC20(asset).approve(address(lendingPoolAddr), amount);
+        IERC20(debtAsset).approve(address(lendingPoolAddr), flashLoanAmount);
 
         (uint256 actualDebtCovered, uint256 actualCollateralLiquidated) = ILendingPool(
             lendingPoolAddr
-        ).liquidationCall(collateral, asset, userToLiquidate, amount, false);
+        ).liquidationCall(collateral, debtAsset, userToLiquidate, flashLoanAmount, false);
 
-        //swap collateral from liquidate back to asset from flashloan to pay it off
-        uint256 currentBalance = IERC20(collateral).balanceOf(address(this));
-        uint256 minAmountOut = (myMinBenefit * (amount)) / 10000 + premium - currentBalance;
-        swapToBorrowedAsset(collateral, minAmountOut, swapPath);
+        // Swap collateral from liquidate back to the debt asset from flashloan to pay it off
+        uint256 currentDebtAssetBalance = IERC20(collateral).balanceOf(address(this));
+        uint256 minDebtAmountOut = (myMinBenefit * (flashLoanAmount)) /
+            10000 +
+            flashLoanPremium -
+            currentDebtAssetBalance;
+        swapToBorrowedAsset(collateral, minDebtAmountOut, swapPath);
 
-        // Calculate profit after paying back the loan and fees
+        // Calculate profit (in debt asset) after paying back the loan and fees
         // IF NOT ENOUGH FUNDS TO REPAY THE LOAN, THE TRANSACTION WILL REVERT
-        uint256 profit = IERC20(asset).balanceOf(address(this)) - amount - premium;
+        uint256 profit = IERC20(debtAsset).balanceOf(address(this)) -
+            flashLoanAmount -
+            flashLoanPremium;
         require(profit > 0, "Not enough profit to repay the loan");
 
         // Transfer profit to treasury
-        IERC20(asset).safeTransfer(treasury, profit);
+        IERC20(debtAsset).safeTransfer(treasury, profit);
 
         // Approve the LendingPool contract allowance to *pull* the owed amount
-        IERC20(asset).approve(lendingPoolAddr, amount + premium);
+        IERC20(debtAsset).approve(lendingPoolAddr, flashLoanAmount + flashLoanPremium);
 
         emit FlashLoanLiquidation(
             collateral,
-            asset,
-            amount,
-            premium,
+            debtAsset,
+            userToLiquidate,
+            flashLoanAmount,
+            flashLoanPremium,
             actualDebtCovered,
             actualCollateralLiquidated,
             profit
@@ -201,25 +220,28 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     /**
      * @notice  This function is used to swap the collateral back to the borrowed asset
      * @dev     Swaps the full amount of the token that has been liquidated
+     * @param   _collateralAsset  Token address of the collateral
+     * @param   _minDebtAmountOut  Minimum amount of the borrowed asset that should be received
+     * @param   _swapPath  Path for the uniV2 swap
      */
     function swapToBorrowedAsset(
-        address asset_from,
-        uint amountOutMin,
-        address[] memory swapPath
+        address _collateralAsset,
+        uint256 _minDebtAmountOut,
+        address[] memory _swapPath
     ) public {
-        IERC20 asset_fromToken = IERC20(asset_from);
+        IERC20 collateralToken = IERC20(_collateralAsset);
 
         // swap full amount of current balance of the token (everything that has been liquidated)
-        uint256 amountToTrade = asset_fromToken.balanceOf(address(this));
+        uint256 amountToTrade = collateralToken.balanceOf(address(this));
 
         // approve uniswap access to the token
-        asset_fromToken.approve(address(uniswapV2Router), amountToTrade);
+        collateralToken.approve(address(uniswapV2Router), amountToTrade);
 
-        // Execute swap from asset_from into requested ERC20 (asset_to) token
+        // Execute swap from _collateralAsset into requested ERC20 debt token
         uniswapV2Router.swapExactTokensForTokens(
             amountToTrade,
-            amountOutMin,
-            swapPath,
+            _minDebtAmountOut,
+            _swapPath,
             address(this),
             block.timestamp + 300 // 5 minutes deadline
         );
