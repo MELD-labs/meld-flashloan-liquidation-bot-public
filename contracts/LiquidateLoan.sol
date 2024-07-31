@@ -11,7 +11,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title LiquidateLoan
- * @author Pepe Blasco & MELD team
+ * @author MELD team
  * @notice A contract that liquidates unhealthy loans leveraging flashloans and swaps the collateral back to the borrowed asset in a uniV2 protocol
  */
 contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
@@ -183,7 +183,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         ).liquidationCall(collateral, debtAsset, userToLiquidate, flashLoanAmount, false);
 
         // Swap collateral from liquidate back to the debt asset from flashloan to pay it off
-        uint256 currentDebtAssetBalance = IERC20(collateral).balanceOf(address(this));
+        uint256 currentDebtAssetBalance = IERC20(debtAsset).balanceOf(address(this));
         uint256 minDebtAmountOut = (myMinBenefit * (flashLoanAmount)) /
             10000 +
             flashLoanPremium -
