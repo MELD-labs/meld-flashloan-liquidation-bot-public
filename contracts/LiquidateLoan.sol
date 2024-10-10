@@ -24,7 +24,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     IPriceOracle public priceOracle;
     IUniswapV2Router02 public uniswapV2Router;
 
-    uint256 public myMinProfit; // In basis points (105_00 = 5% profit)
+    uint256 public myMinProfit; // In basis points (5_00 = 5% profit)
 
     address public lendingPoolAddr;
 
@@ -78,7 +78,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         // instantiate UniswapV2 Router02
         uniswapV2Router = IUniswapV2Router02(address(_uniswapV2Router));
 
-        myMinProfit = 105_00; // 5% profit
+        myMinProfit = 5_00; // 5% profit
 
         _setupRole(DEFAULT_ADMIN_ROLE, _defaultAdmin);
         treasury = _defaultAdmin;
@@ -257,6 +257,7 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         uint256 debtAssetAmountOut = flashLoanAmount +
             flashLoanPremium -
             debtAsset.balanceOf(address(this));
+
         uint256 maxAmountIn = collateralAsset.balanceOf(address(this)) - myMinProfitCollateral;
 
         collateralAsset.approve(address(uniswapV2Router), maxAmountIn);
@@ -284,9 +285,10 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         uint256 collateralAssetPrice
     ) internal view returns (uint256) {
         (uint256 debtAssetPrice, ) = priceOracle.getAssetPrice(address(debtAsset));
-        uint256 flashLoanAmountUSD = (debtAssetPrice * flashLoanAmount) / debtAsset.decimals(); // in USD (18 decimals)
+        uint256 flashLoanAmountUSD = (debtAssetPrice * flashLoanAmount) /
+            10 ** debtAsset.decimals(); // in USD (18 decimals)
 
-        uint256 myMinProfitUSD = (myMinProfit * flashLoanAmountUSD) / 10000;
+        uint256 myMinProfitUSD = (myMinProfit * flashLoanAmountUSD) / 100_00;
         uint256 myMinProfitCollateral = (myMinProfitUSD * 10 ** collateralAsset.decimals()) /
             collateralAssetPrice; // in collateral asset decimals
 
