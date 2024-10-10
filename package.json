@@ -12,7 +12,7 @@
     "coverage": "hardhat coverage",
     "ts:check": "eslint \"test/**/*.ts\" && prettier --check .",
     "ts:fix": "eslint --fix \"test/**/*.ts\" && prettier --write .",
-    "solhint": "solhint contracts/**/*.sol --fix"
+    "solhint": "solhint contracts/**/*.sol"
   },
   "devDependencies": {
     "@ethersproject/bytes": "^5.0.0",

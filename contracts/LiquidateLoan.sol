@@ -3,9 +3,11 @@ pragma solidity 0.8.24;
 
 import {FlashLoanReceiverBase} from "./FlashLoanReceiverBase.sol";
 import {IAddressesProvider} from "./interfaces/IAddressesProvider.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 import {ILendingPool} from "./interfaces/ILendingPool.sol";
+import {IERC20} from "./interfaces/IERC20.sol";
 import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
-import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
@@ -19,13 +21,14 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     using SafeMath for uint256;
 
     IAddressesProvider public provider;
+    IPriceOracle public priceOracle;
     IUniswapV2Router02 public uniswapV2Router;
 
-    uint256 public myMinBenefit; // In basis points (105_00 = 5% benefit)
+    uint256 public myMinProfit; // In basis points (5_00 = 5% profit)
 
     address public lendingPoolAddr;
 
-    // Will receive the benefits from liquidations
+    // Will receive the profits from liquidations
     address public treasury;
 
     /**
@@ -37,7 +40,8 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
      * @param   flashLoanPremium  Premium of the flash loan
      * @param   actualDebtCovered  Amount of the debt covered
      * @param   actualCollateralLiquidated  Amount of the collateral liquidated
-     * @param   debtAssetProfit  Profit from the liquidation
+     * @param   collateralAssetProfit  Profit from the liquidation in collateral asset
+     * @param   usdProfit  Profit from the liquidation in USD (18 decimals)
      */
     event FlashLoanLiquidation(
         address indexed collateralAddress,
@@ -47,7 +51,8 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         uint256 flashLoanPremium,
         uint256 actualDebtCovered,
         uint256 actualCollateralLiquidated,
-        uint256 debtAssetProfit
+        uint256 collateralAssetProfit,
+        uint256 usdProfit
     );
 
     /**
@@ -73,10 +78,12 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         // instantiate UniswapV2 Router02
         uniswapV2Router = IUniswapV2Router02(address(_uniswapV2Router));
 
-        myMinBenefit = 105_00; // 5% profit
+        myMinProfit = 5_00; // 5% profit
 
         _setupRole(DEFAULT_ADMIN_ROLE, _defaultAdmin);
         treasury = _defaultAdmin;
+
+        priceOracle = IPriceOracle(provider.getPriceOracle());
     }
 
     /**
@@ -89,12 +96,12 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
     }
 
     /**
-     * @notice  This function is used to set the minimum benefit that the liquidator will get from the liquidation
-     * @param   _myMinBenefit  Minimum benefit that the liquidator will get from the liquidation in basis points (105_00 = 5% benefit)
+     * @notice  This function is used to set the minimum profit that the liquidator will get from the liquidation
+     * @param   _myMinProfit  Minimum profit that the liquidator will get from the liquidation in basis points (105_00 = 5% profit)
      */
-    function setMyMinBenefit(uint256 _myMinBenefit) public onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_myMinBenefit > 100_00, "Invalid min benefit");
-        myMinBenefit = _myMinBenefit;
+    function setMyMinProfit(uint256 _myMinProfit) public onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_myMinProfit > 100_00, "Invalid min profit");
+        myMinProfit = _myMinProfit;
     }
 
     /**
@@ -166,84 +173,125 @@ contract LiquidateLoan is FlashLoanReceiverBase, AccessControl {
         bytes calldata _params
     ) external override returns (bool) {
         // This are the params we passed into the flashloan function
-        (address collateral, address userToLiquidate, address[] memory swapPath) = abi.decode(
-            _params,
-            (address, address, address[])
-        );
+        (address collateralAssetAddress, address userToLiquidate, address[] memory swapPath) = abi
+            .decode(_params, (address, address, address[]));
 
         // Approve tokens and liquidate unhealthy loan
-        address debtAsset = _assets[0];
+        address debtAssetAddress = _assets[0];
         uint256 flashLoanAmount = _amounts[0];
         uint256 flashLoanPremium = _premiums[0];
 
-        IERC20(debtAsset).approve(address(lendingPoolAddr), flashLoanAmount);
+        IERC20 debtAsset = IERC20(debtAssetAddress);
+        IERC20 collateralAsset = IERC20(collateralAssetAddress);
+
+        (uint256 collateralAssetPrice, ) = priceOracle.getAssetPrice(collateralAssetAddress);
+        uint256 myMinProfitCollateral = _getMinProfitCollateral(
+            debtAsset,
+            collateralAsset,
+            flashLoanAmount,
+            collateralAssetPrice
+        );
+
+        debtAsset.approve(address(lendingPoolAddr), flashLoanAmount);
 
         (uint256 actualDebtCovered, uint256 actualCollateralLiquidated) = ILendingPool(
             lendingPoolAddr
-        ).liquidationCall(collateral, debtAsset, userToLiquidate, flashLoanAmount, false);
+        ).liquidationCall(
+                collateralAssetAddress,
+                debtAssetAddress,
+                userToLiquidate,
+                flashLoanAmount,
+                false
+            );
 
-        // Swap collateral from liquidate back to the debt asset from flashloan to pay it off
-        uint256 currentDebtAssetBalance = IERC20(debtAsset).balanceOf(address(this));
-        uint256 minDebtAmountOut = (myMinBenefit * (flashLoanAmount)) /
-            10000 +
-            flashLoanPremium -
-            currentDebtAssetBalance;
-        swapToBorrowedAsset(collateral, minDebtAmountOut, swapPath);
+        _swapToDebtAsset(
+            debtAsset,
+            collateralAsset,
+            flashLoanAmount,
+            flashLoanPremium,
+            swapPath,
+            myMinProfitCollateral
+        );
 
-        // Calculate profit (in debt asset) after paying back the loan and fees
-        // IF NOT ENOUGH FUNDS TO REPAY THE LOAN, THE TRANSACTION WILL REVERT
-        uint256 profit = IERC20(debtAsset).balanceOf(address(this)) -
-            flashLoanAmount -
-            flashLoanPremium;
-        require(profit > 0, "Not enough profit to repay the loan");
+        uint256 collateralProfit = collateralAsset.balanceOf(address(this));
+        uint256 usdProfit = (collateralProfit * collateralAssetPrice) /
+            10 ** collateralAsset.decimals();
 
-        // Transfer profit to treasury
-        IERC20(debtAsset).safeTransfer(treasury, profit);
+        collateralAsset.safeTransfer(treasury, collateralProfit);
 
         // Approve the LendingPool contract allowance to *pull* the owed amount
-        IERC20(debtAsset).approve(lendingPoolAddr, flashLoanAmount + flashLoanPremium);
+        debtAsset.approve(lendingPoolAddr, flashLoanAmount + flashLoanPremium);
 
         emit FlashLoanLiquidation(
-            collateral,
-            debtAsset,
+            collateralAssetAddress,
+            debtAssetAddress,
             userToLiquidate,
             flashLoanAmount,
             flashLoanPremium,
             actualDebtCovered,
             actualCollateralLiquidated,
-            profit
+            collateralProfit,
+            usdProfit
         );
 
         return true;
     }
 
     /**
-     * @notice  This function is used to swap the collateral back to the borrowed asset
-     * @dev     Swaps the full amount of the token that has been liquidated
-     * @param   _collateralAsset  Token address of the collateral
-     * @param   _minDebtAmountOut  Minimum amount of the borrowed asset that should be received
-     * @param   _swapPath  Path for the uniV2 swap
+     * @notice This function is used to swap the collateral back to the borrowed asset
+     * @param debtAsset ERC20 token of the debt asset
+     * @param collateralAsset ERC20 token of the collateral asset
+     * @param flashLoanAmount Amount of the flash loan
+     * @param flashLoanPremium Premium of the flash loan
+     * @param swapPath Path for the swap
+     * @param myMinProfitCollateral Minimum profit in collateral asset
      */
-    function swapToBorrowedAsset(
-        address _collateralAsset,
-        uint256 _minDebtAmountOut,
-        address[] memory _swapPath
-    ) public {
-        IERC20 collateralToken = IERC20(_collateralAsset);
+    function _swapToDebtAsset(
+        IERC20 debtAsset,
+        IERC20 collateralAsset,
+        uint256 flashLoanAmount,
+        uint256 flashLoanPremium,
+        address[] memory swapPath,
+        uint256 myMinProfitCollateral
+    ) internal {
+        uint256 debtAssetAmountOut = flashLoanAmount +
+            flashLoanPremium -
+            debtAsset.balanceOf(address(this));
 
-        // swap full amount of current balance of the token (everything that has been liquidated)
-        uint256 amountToTrade = collateralToken.balanceOf(address(this));
+        uint256 maxAmountIn = collateralAsset.balanceOf(address(this)) - myMinProfitCollateral;
 
-        // approve uniswap access to the token
-        collateralToken.approve(address(uniswapV2Router), amountToTrade);
+        collateralAsset.approve(address(uniswapV2Router), maxAmountIn);
 
-        // Execute swap from _collateralAsset into requested ERC20 debt token
-        uniswapV2Router.swapExactTokensForTokens(
-            amountToTrade,
-            _minDebtAmountOut,
-            _swapPath,
+        uniswapV2Router.swapTokensForExactTokens(
+            debtAssetAmountOut,
+            maxAmountIn,
+            swapPath,
             address(this),
             block.timestamp + 300 // 5 minutes deadline
         );
+    }
+
+    /**
+     * @notice This function is used to calculate the minimum profit in collateral asset
+     * @param debtAsset ERC20 token of the debt asset
+     * @param collateralAsset ERC20 token of the collateral asset
+     * @param flashLoanAmount Amount of the flash loan
+     * @param collateralAssetPrice Price of the collateral asset
+     */
+    function _getMinProfitCollateral(
+        IERC20 debtAsset,
+        IERC20 collateralAsset,
+        uint256 flashLoanAmount,
+        uint256 collateralAssetPrice
+    ) internal view returns (uint256) {
+        (uint256 debtAssetPrice, ) = priceOracle.getAssetPrice(address(debtAsset));
+        uint256 flashLoanAmountUSD = (debtAssetPrice * flashLoanAmount) /
+            10 ** debtAsset.decimals(); // in USD (18 decimals)
+
+        uint256 myMinProfitUSD = (myMinProfit * flashLoanAmountUSD) / 100_00;
+        uint256 myMinProfitCollateral = (myMinProfitUSD * 10 ** collateralAsset.decimals()) /
+            collateralAssetPrice; // in collateral asset decimals
+
+        return myMinProfitCollateral;
     }
 }
